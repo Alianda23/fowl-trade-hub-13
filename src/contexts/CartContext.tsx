@@ -13,6 +13,7 @@ interface CartContextType {
   addToCart: (product: Product) => void;
   removeFromCart: (productId: string) => void;
   updateCartItemQuantity: (productId: string, newQuantity: number) => void;
+  clearCart: () => void;
   showCart: boolean;
   setShowCart: (show: boolean) => void;
 }
@@ -73,11 +74,17 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     ));
   };
 
+  // Clear all items from cart
+  const clearCart = () => {
+    setCart([]);
+  };
+
   const value = {
     cart,
     addToCart,
     removeFromCart,
     updateCartItemQuantity,
+    clearCart,
     showCart,
     setShowCart
   };
