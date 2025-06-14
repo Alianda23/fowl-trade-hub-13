@@ -16,14 +16,19 @@ import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 
-interface Order {
+interface SellerOrder {
   id: string;
   customerName: string;
-  product: string;
-  quantity: number;
-  total: number;
-  status: 'pending' | 'dispatched' | 'cancelled' | 'collected';
+  items: Array<{
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+  }>;
+  status: 'pending' | 'confirmed' | 'dispatched' | 'delivered' | 'cancelled';
+  paymentStatus: string;
   date: string;
+  total: number;
 }
 
 const SellerOrders = () => {
@@ -31,6 +36,7 @@ const SellerOrders = () => {
   const navigate = useNavigate();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [orders, setOrders] = useState<SellerOrder[]>([]);
   
   useEffect(() => {
     const checkAuth = async () => {
@@ -53,6 +59,7 @@ const SellerOrders = () => {
           
           if (data.isAuthenticated) {
             setIsAuthenticated(true);
+            fetchOrders();
           } else {
             // If backend says not authenticated, clear localStorage
             localStorage.removeItem('isSellerAuthenticated');
@@ -68,60 +75,97 @@ const SellerOrders = () => {
 
     checkAuth();
   }, [navigate, toast]);
-  
-  // This would typically come from your backend
-  const orders: Order[] = [
-    {
-      id: "1",
-      customerName: "John Doe",
-      product: "Day-old Chicks",
-      quantity: 50,
-      total: 5000,
-      status: 'pending',
-      date: "2024-02-20"
-    }
-  ];
 
-  const handleDispatch = (orderId: string) => {
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/orders/seller', {
+        method: 'GET',
+        credentials: 'include'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setOrders(data.orders || []);
+      } else {
+        toast({
+          title: "Error",
+          description: "Failed to fetch orders",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Error fetching orders:", error);
+      toast({
+        title: "Error",
+        description: "Failed to connect to server",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleStatusUpdate = async (orderId: string, newStatus: string) => {
     if (!isAuthenticated) {
       toast({
         title: "Authentication Required",
-        description: "Please sign in to dispatch orders",
+        description: "Please sign in to update orders",
         variant: "destructive",
       });
       return;
     }
     
-    // Here you would update the order status in your backend
-    toast({
-      title: "Order Dispatched",
-      description: `Order #${orderId} has been marked as dispatched.`,
-    });
+    try {
+      const response = await fetch(`http://localhost:5000/api/orders/${orderId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ status: newStatus })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        toast({
+          title: "Order Updated",
+          description: `Order #${orderId} has been updated to ${newStatus}.`,
+        });
+        
+        // Refresh orders
+        fetchOrders();
+      } else {
+        toast({
+          title: "Error",
+          description: data.message || "Failed to update order",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Error updating order:", error);
+      toast({
+        title: "Error",
+        description: "Failed to connect to server",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDispatch = (orderId: string) => {
+    handleStatusUpdate(orderId, 'dispatched');
   };
 
   const handleCancel = (orderId: string) => {
-    if (!isAuthenticated) {
-      toast({
-        title: "Authentication Required",
-        description: "Please sign in to cancel orders",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    // Here you would update the order status in your backend
-    toast({
-      title: "Order Cancelled",
-      description: `Order #${orderId} has been cancelled.`,
-    });
+    handleStatusUpdate(orderId, 'cancelled');
   };
 
-  const getStatusBadge = (status: Order['status']) => {
+  const getStatusBadge = (status: SellerOrder['status']) => {
     const statusStyles = {
       pending: "bg-yellow-100 text-yellow-800",
-      dispatched: "bg-blue-100 text-blue-800",
-      cancelled: "bg-red-100 text-red-800",
-      collected: "bg-green-100 text-green-800"
+      confirmed: "bg-blue-100 text-blue-800",
+      dispatched: "bg-purple-100 text-purple-800",
+      delivered: "bg-green-100 text-green-800",
+      cancelled: "bg-red-100 text-red-800"
     };
 
     return (
@@ -173,10 +217,10 @@ const SellerOrders = () => {
                   <TableRow>
                     <TableHead>Order ID</TableHead>
                     <TableHead>Customer</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Quantity</TableHead>
+                    <TableHead>Products</TableHead>
                     <TableHead>Total</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Payment</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
@@ -186,14 +230,24 @@ const SellerOrders = () => {
                     <TableRow key={order.id}>
                       <TableCell>#{order.id}</TableCell>
                       <TableCell>{order.customerName}</TableCell>
-                      <TableCell>{order.product}</TableCell>
-                      <TableCell>{order.quantity}</TableCell>
+                      <TableCell>
+                        {order.items.map((item, index) => (
+                          <div key={index} className="text-sm">
+                            {item.productName} (x{item.quantity})
+                          </div>
+                        ))}
+                      </TableCell>
                       <TableCell>KES {order.total.toLocaleString()}</TableCell>
                       <TableCell>{getStatusBadge(order.status)}</TableCell>
+                      <TableCell>
+                        <Badge variant={order.paymentStatus === 'completed' ? 'default' : 'destructive'}>
+                          {order.paymentStatus}
+                        </Badge>
+                      </TableCell>
                       <TableCell>{order.date}</TableCell>
                       <TableCell>
                         <div className="flex gap-2">
-                          {order.status === 'pending' && (
+                          {(order.status === 'pending' || order.status === 'confirmed') && (
                             <>
                               <Button
                                 variant="outline"
@@ -217,7 +271,7 @@ const SellerOrders = () => {
                               </Button>
                             </>
                           )}
-                          {!isAuthenticated && order.status === 'pending' && (
+                          {!isAuthenticated && (order.status === 'pending' || order.status === 'confirmed') && (
                             <Button
                               variant="outline"
                               size="sm"

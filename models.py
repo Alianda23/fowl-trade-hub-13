@@ -59,6 +59,52 @@ class Product(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+# New Order Models
+class Order(db.Model):
+    __tablename__ = 'orders'
+    
+    order_id = db.Column(db.Integer, primary_key=True)
+    order_number = db.Column(db.String(50), unique=True, nullable=False)
+    
+    # Customer info (can be null for guest orders)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=True)
+    user = db.relationship('User', backref=db.backref('orders', lazy=True))
+    
+    # Customer details (for guest orders or backup)
+    customer_name = db.Column(db.String(100), nullable=True)
+    customer_email = db.Column(db.String(100), nullable=True)
+    customer_phone = db.Column(db.String(20), nullable=True)
+    
+    # Order details
+    total_amount = db.Column(db.Float, nullable=False)
+    status = db.Column(db.String(20), default='pending', nullable=False)  # pending, confirmed, dispatched, delivered, cancelled
+    payment_status = db.Column(db.String(20), default='pending', nullable=False)  # pending, completed, failed
+    payment_method = db.Column(db.String(50), default='mpesa', nullable=False)
+    
+    # M-Pesa details
+    mpesa_checkout_request_id = db.Column(db.String(100), nullable=True)
+    mpesa_receipt_number = db.Column(db.String(50), nullable=True)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class OrderItem(db.Model):
+    __tablename__ = 'order_items'
+    
+    item_id = db.Column(db.Integer, primary_key=True)
+    
+    order_id = db.Column(db.Integer, db.ForeignKey('orders.order_id'), nullable=False)
+    order = db.relationship('Order', backref=db.backref('items', lazy=True, cascade='all, delete-orphan'))
+    
+    product_id = db.Column(db.Integer, db.ForeignKey('products.product_id'), nullable=False)
+    product = db.relationship('Product', backref=db.backref('order_items', lazy=True))
+    
+    quantity = db.Column(db.Integer, nullable=False)
+    unit_price = db.Column(db.Float, nullable=False)
+    total_price = db.Column(db.Float, nullable=False)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 class Message(db.Model):
     __tablename__ = 'messages'
     

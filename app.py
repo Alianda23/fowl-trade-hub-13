@@ -1,10 +1,10 @@
-
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-from models import db, User, SellerProfile, AdminProfile, Product, Message
+from models import db, User, SellerProfile, AdminProfile, Product, Message, Order, OrderItem
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import os
+import uuid
 from app_auth import check_admin_auth, check_seller_auth
 from routes.mpesa import mpesa_routes
 
@@ -731,11 +731,189 @@ def get_seller_message_count():
         print(f"Error fetching message count: {str(e)}")
         return jsonify({'success': False, 'message': f'Error fetching message count: {str(e)}'})
 
-# Admin endpoints
-@app.route('/api/admin/users', methods=['GET'])
-def get_all_users():
-    """Get all users (admin only)"""
-    # First check if admin is authenticated
+# Order Management APIs
+@app.route('/api/orders/create', methods=['POST'])
+def create_order():
+    """Create a new order"""
+    try:
+        data = request.json
+        
+        # Generate unique order number
+        order_number = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}{str(uuid.uuid4())[:4].upper()}"
+        
+        # Get user info if authenticated
+        user_id = session.get('user_id')
+        
+        # Create new order
+        new_order = Order(
+            order_number=order_number,
+            user_id=user_id,
+            customer_name=data.get('customerName'),
+            customer_email=data.get('customerEmail'),
+            customer_phone=data.get('customerPhone'),
+            total_amount=float(data['totalAmount']),
+            payment_method=data.get('paymentMethod', 'mpesa'),
+            mpesa_checkout_request_id=data.get('checkoutRequestId')
+        )
+        
+        db.session.add(new_order)
+        db.session.flush()  # Get the order ID
+        
+        # Add order items
+        for item in data['items']:
+            order_item = OrderItem(
+                order_id=new_order.order_id,
+                product_id=int(item['productId']),
+                quantity=int(item['quantity']),
+                unit_price=float(item['unitPrice']),
+                total_price=float(item['totalPrice'])
+            )
+            db.session.add(order_item)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Order created successfully',
+            'orderId': new_order.order_id,
+            'orderNumber': order_number
+        })
+    
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error creating order: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error creating order: {str(e)}'})
+
+@app.route('/api/orders/update-payment', methods=['PUT'])
+def update_order_payment():
+    """Update order payment status"""
+    try:
+        data = request.json
+        
+        order = Order.query.filter_by(mpesa_checkout_request_id=data['checkoutRequestId']).first()
+        
+        if not order:
+            return jsonify({'success': False, 'message': 'Order not found'})
+        
+        order.payment_status = data['paymentStatus']
+        if data.get('receiptNumber'):
+            order.mpesa_receipt_number = data['receiptNumber']
+        
+        # If payment is successful, update order status
+        if data['paymentStatus'] == 'completed':
+            order.status = 'confirmed'
+        elif data['paymentStatus'] == 'failed':
+            order.status = 'cancelled'
+        
+        order.updated_at = datetime.utcnow()
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Order payment status updated'
+        })
+    
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating order payment: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error updating order payment: {str(e)}'})
+
+@app.route('/api/orders/user', methods=['GET'])
+def get_user_orders():
+    """Get orders for the authenticated user"""
+    try:
+        user_id = session.get('user_id')
+        
+        if not user_id:
+            return jsonify({'success': False, 'message': 'User not authenticated'})
+        
+        orders = Order.query.filter_by(user_id=user_id).order_by(Order.created_at.desc()).all()
+        order_list = []
+        
+        for order in orders:
+            # Get order items with product details
+            items = []
+            for item in order.items:
+                product = item.product
+                items.append({
+                    'id': str(product.product_id),
+                    'name': product.name,
+                    'image': product.image_url,
+                    'price': item.unit_price,
+                    'quantity': item.quantity
+                })
+            
+            order_list.append({
+                'id': order.order_number,
+                'products': items,
+                'status': order.status,
+                'date': order.created_at.strftime('%Y-%m-%d'),
+                'total': order.total_amount
+            })
+        
+        return jsonify({
+            'success': True,
+            'orders': order_list
+        })
+    
+    except Exception as e:
+        print(f"Error fetching user orders: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error fetching orders: {str(e)}'})
+
+@app.route('/api/orders/seller', methods=['GET'])
+def get_seller_orders():
+    """Get orders for the authenticated seller"""
+    auth_check = check_seller_auth()
+    auth_data = auth_check.get_json()
+    
+    if not auth_data.get('isAuthenticated'):
+        return jsonify({'success': False, 'message': 'Seller not authenticated'})
+    
+    try:
+        seller_id = auth_data.get('seller_id')
+        
+        # Get orders that contain products from this seller
+        orders = db.session.query(Order).join(OrderItem).join(Product).filter(
+            Product.seller_id == seller_id
+        ).distinct().order_by(Order.created_at.desc()).all()
+        
+        order_list = []
+        
+        for order in orders:
+            # Get only items from this seller
+            seller_items = []
+            for item in order.items:
+                if item.product.seller_id == int(seller_id):
+                    seller_items.append({
+                        'productName': item.product.name,
+                        'quantity': item.quantity,
+                        'unitPrice': item.unit_price,
+                        'totalPrice': item.total_price
+                    })
+            
+            if seller_items:  # Only include orders with items from this seller
+                order_list.append({
+                    'id': order.order_number,
+                    'customerName': order.customer_name or 'Guest',
+                    'items': seller_items,
+                    'status': order.status,
+                    'paymentStatus': order.payment_status,
+                    'date': order.created_at.strftime('%Y-%m-%d'),
+                    'total': sum(item['totalPrice'] for item in seller_items)
+                })
+        
+        return jsonify({
+            'success': True,
+            'orders': order_list
+        })
+    
+    except Exception as e:
+        print(f"Error fetching seller orders: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error fetching orders: {str(e)}'})
+
+@app.route('/api/orders/admin', methods=['GET'])
+def get_admin_orders():
+    """Get all orders for admin"""
     auth_check = check_admin_auth()
     auth_data = auth_check.get_json()
     
@@ -743,68 +921,72 @@ def get_all_users():
         return jsonify({'success': False, 'message': 'Admin not authenticated'})
     
     try:
-        # Get all buyers
-        buyers = User.query.all()
-        buyer_list = []
+        orders = Order.query.order_by(Order.created_at.desc()).all()
+        order_list = []
         
-        for user in buyers:
-            buyer_list.append({
-                'user_id': user.user_id,
-                'username': user.username,
-                'email': user.email,
-                'phone_number': user.phone_number,
-                'created_at': user.created_at.isoformat()
-            })
-        
-        # Get all sellers
-        sellers = SellerProfile.query.all()
-        seller_list = []
-        
-        for seller in sellers:
-            seller_list.append({
-                'seller_id': seller.seller_id,
-                'username': seller.username,
-                'email': seller.email,
-                'business_name': seller.business_name,
-                'approval_status': seller.approval_status,
-                'phone_number': seller.phone_number,
-                'created_at': seller.created_at.isoformat()
+        for order in orders:
+            order_list.append({
+                'id': order.order_number,
+                'customer': order.customer_name or 'Guest',
+                'total': order.total_amount,
+                'status': order.status,
+                'paymentStatus': order.payment_status,
+                'date': order.created_at.strftime('%Y-%m-%d')
             })
         
         return jsonify({
             'success': True,
-            'users': buyer_list,
-            'sellers': seller_list
+            'orders': order_list
         })
     
     except Exception as e:
-        print(f"Error fetching users: {str(e)}")
-        return jsonify({'success': False, 'message': f'Error fetching users: {str(e)}'})
+        print(f"Error fetching admin orders: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error fetching orders: {str(e)}'})
 
-# For testing
-@app.route('/api/test/users', methods=['GET'])
-def test_get_users():
-    """Test endpoint to get users without authentication"""
+@app.route('/api/orders/<order_id>/status', methods=['PUT'])
+def update_order_status(order_id):
+    """Update order status (seller/admin only)"""
     try:
-        users = User.query.all()
-        user_list = []
+        # Check if user is seller or admin
+        seller_auth = check_seller_auth()
+        admin_auth = check_admin_auth()
         
-        for user in users:
-            user_list.append({
-                'user_id': user.user_id,
-                'username': user.username,
-                'email': user.email,
-                'created_at': user.created_at.isoformat()
-            })
+        seller_data = seller_auth.get_json()
+        admin_data = admin_auth.get_json()
+        
+        if not (seller_data.get('isAuthenticated') or admin_data.get('isAuthenticated')):
+            return jsonify({'success': False, 'message': 'Authentication required'})
+        
+        data = request.json
+        order = Order.query.filter_by(order_number=order_id).first()
+        
+        if not order:
+            return jsonify({'success': False, 'message': 'Order not found'})
+        
+        # If seller, verify they have products in this order
+        if seller_data.get('isAuthenticated'):
+            seller_id = seller_data.get('seller_id')
+            has_products = db.session.query(OrderItem).join(Product).filter(
+                OrderItem.order_id == order.order_id,
+                Product.seller_id == seller_id
+            ).first()
+            
+            if not has_products:
+                return jsonify({'success': False, 'message': 'You do not have products in this order'})
+        
+        order.status = data['status']
+        order.updated_at = datetime.utcnow()
+        db.session.commit()
         
         return jsonify({
             'success': True,
-            'users': user_list
+            'message': 'Order status updated successfully'
         })
     
     except Exception as e:
-        print(f"Error fetching test users: {str(e)}")
-        return jsonify({'success': False, 'message': f'Error: {str(e)}'})
+        db.session.rollback()
+        print(f"Error updating order status: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error updating order status: {str(e)}'})
 
 if __name__ == '__main__':
     app.run(debug=True)

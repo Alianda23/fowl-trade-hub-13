@@ -1,24 +1,32 @@
 
+import { useState, useEffect } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useToast } from "@/hooks/use-toast";
 
-const mockOrders = [
-  { id: "ORD001", customer: "John Doe", total: 2500, status: "Completed", date: "2024-02-20" },
-  { id: "ORD002", customer: "Jane Smith", total: 1800, status: "Pending", date: "2024-02-19" },
-  { id: "ORD003", customer: "Bob Wilson", total: 3200, status: "Processing", date: "2024-02-18" },
-];
+interface AdminOrder {
+  id: string;
+  customer: string;
+  total: number;
+  status: string;
+  paymentStatus: string;
+  date: string;
+}
 
 const getStatusColor = (status: string) => {
   switch (status.toLowerCase()) {
-    case "completed":
+    case "confirmed":
+    case "delivered":
       return "bg-green-500";
     case "pending":
       return "bg-yellow-500";
-    case "processing":
+    case "dispatched":
       return "bg-blue-500";
+    case "cancelled":
+      return "bg-red-500";
     default:
       return "bg-gray-500";
   }
@@ -26,6 +34,43 @@ const getStatusColor = (status: string) => {
 
 export default function Orders() {
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const [orders, setOrders] = useState<AdminOrder[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/orders/admin', {
+        method: 'GET',
+        credentials: 'include'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setOrders(data.orders || []);
+      } else {
+        toast({
+          title: "Error",
+          description: "Failed to fetch orders",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Error fetching orders:", error);
+      toast({
+        title: "Error",
+        description: "Failed to connect to server",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrders();
+  }, []);
 
   return (
     <div className="p-8">
@@ -39,34 +84,49 @@ export default function Orders() {
           <h1 className="text-2xl font-bold">Orders Management</h1>
         </div>
       </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Business</TableHead>
-            <TableHead>Order ID</TableHead>
-            <TableHead>Customer</TableHead>
-            <TableHead>Total (KES)</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Date</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {mockOrders.map((order) => (
-            <TableRow key={order.id}>
-              <TableCell>KukuHub</TableCell>
-              <TableCell>{order.id}</TableCell>
-              <TableCell>{order.customer}</TableCell>
-              <TableCell>{order.total}</TableCell>
-              <TableCell>
-                <Badge className={`${getStatusColor(order.status)} text-white`}>
-                  {order.status}
-                </Badge>
-              </TableCell>
-              <TableCell>{order.date}</TableCell>
+
+      {isLoading ? (
+        <div className="flex justify-center py-8">Loading orders...</div>
+      ) : orders.length === 0 ? (
+        <div className="rounded-lg border bg-white p-8 text-center">
+          <p className="text-gray-500">No orders found.</p>
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Business</TableHead>
+              <TableHead>Order ID</TableHead>
+              <TableHead>Customer</TableHead>
+              <TableHead>Total (KES)</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Payment</TableHead>
+              <TableHead>Date</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {orders.map((order) => (
+              <TableRow key={order.id}>
+                <TableCell>KukuHub</TableCell>
+                <TableCell>{order.id}</TableCell>
+                <TableCell>{order.customer}</TableCell>
+                <TableCell>{order.total}</TableCell>
+                <TableCell>
+                  <Badge className={`${getStatusColor(order.status)} text-white`}>
+                    {order.status}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <Badge variant={order.paymentStatus === 'completed' ? 'default' : 'destructive'}>
+                    {order.paymentStatus}
+                  </Badge>
+                </TableCell>
+                <TableCell>{order.date}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
     </div>
   );
 }

@@ -18,6 +18,8 @@ interface OrdersContextType {
   setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
   showOrders: boolean;
   setShowOrders: (show: boolean) => void;
+  fetchOrders: () => Promise<void>;
+  createOrder: (orderData: any) => Promise<{ success: boolean; orderId?: string; orderNumber?: string }>;
 }
 
 // Create the context with a default value
@@ -28,29 +30,62 @@ export const OrdersProvider = ({ children }: { children: ReactNode }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [showOrders, setShowOrders] = useState(false);
 
-  // Load orders from localStorage on initial render
-  useEffect(() => {
-    const savedOrders = localStorage.getItem('orders');
-    if (savedOrders) {
-      try {
-        const parsedOrders = JSON.parse(savedOrders);
-        setOrders(parsedOrders);
-      } catch (e) {
-        console.error("Error parsing orders from localStorage", e);
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/orders/user', {
+        method: 'GET',
+        credentials: 'include'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setOrders(data.orders || []);
+      } else {
+        console.error("Failed to fetch orders:", data.message);
       }
+    } catch (error) {
+      console.error("Error fetching orders:", error);
     }
-  }, []);
+  };
 
-  // Save orders to localStorage whenever it changes
+  const createOrder = async (orderData: any) => {
+    try {
+      const response = await fetch('http://localhost:5000/api/orders/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify(orderData)
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // Refresh orders after creating new one
+        await fetchOrders();
+      }
+      
+      return data;
+    } catch (error) {
+      console.error("Error creating order:", error);
+      return { success: false };
+    }
+  };
+
+  // Fetch orders when component mounts and user might be authenticated
   useEffect(() => {
-    localStorage.setItem('orders', JSON.stringify(orders));
-  }, [orders]);
+    fetchOrders();
+  }, []);
 
   const value = {
     orders,
     setOrders,
     showOrders,
-    setShowOrders
+    setShowOrders,
+    fetchOrders,
+    createOrder
   };
 
   return <OrdersContext.Provider value={value}>{children}</OrdersContext.Provider>;
