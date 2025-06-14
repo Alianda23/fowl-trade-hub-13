@@ -11,12 +11,22 @@ db.init_app(app)
 
 with app.app_context():
     try:
-        # Create the new order tables
+        # Drop existing order tables if they exist (to recreate with correct schema)
+        db.engine.execute("DROP TABLE IF EXISTS order_items")
+        db.engine.execute("DROP TABLE IF EXISTS orders")
+        
+        # Create the new order tables with correct schema
         db.create_all()
         print("Order tables created successfully!")
         print("Tables created:")
-        print("- orders")
+        print("- orders (with order_number column)")
         print("- order_items")
         
+        # Verify the tables were created correctly
+        result = db.engine.execute("DESCRIBE orders")
+        print("\nOrders table structure:")
+        for row in result:
+            print(f"  {row[0]} - {row[1]}")
+            
     except Exception as e:
         print(f"Error creating tables: {str(e)}")
